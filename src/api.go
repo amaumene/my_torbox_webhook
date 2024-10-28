@@ -1,17 +1,16 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
-	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+	"sync"
 )
 
 type APIResponse struct {
@@ -139,22 +138,61 @@ func downloadFile(downloadURL, shortName string) error {
 }
 
 func writeContentToFile(resp *http.Response, outFile *os.File, shortName string, totalSize int64) {
-	var downloadedSize int64
-	buf := make([]byte, 32*1024)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var totalDownloaded int64
+	chunkSize := totalSize / 4 // Number of chunks to split the file into
+	startTime := time.Now()
 
-	for {
-		n, err := resp.Body.Read(buf)
-		if n > 0 {
-			outFile.Write(buf[:n])
-			downloadedSize += int64(n)
-			fmt.Printf("\rDownloading %s... %.2f%% complete", shortName, float64(downloadedSize)/float64(totalSize)*100)
-		}
-		if err != nil {
-			if err == io.EOF {
-				break
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			start := int64(i) * chunkSize
+			end := start + chunkSize
+			if i == 3 {
+				end = totalSize
 			}
-			log.Println("\nError while reading response body:", err)
-			return
-		}
+
+			req, err := http.NewRequest("GET", resp.Request.URL.String(), nil)
+			if err != nil {
+				log.Println("Error creating request:", err)
+				return
+			}
+			req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end-1))
+			req.Proto = "HTTP/2.0"
+
+			partResp, err := httpClient.Do(req)
+			if err != nil {
+				log.Println("Error downloading chunk:", err)
+				return
+			}
+			defer partResp.Body.Close()
+
+			partBuf := make([]byte, 32*1024)
+			for {
+				n, err := partResp.Body.Read(partBuf)
+				if n > 0 {
+					outFile.WriteAt(partBuf[:n], start)
+					start += int64(n)
+					mu.Lock()
+					totalDownloaded += int64(n)
+					elapsedTime := time.Since(startTime).Seconds()
+					speed := float64(totalDownloaded) / elapsedTime / 1024 // speed in KB/s
+					fmt.Printf("\rDownloading %s... %.2f%% complete, Speed: %.2f KB/s", shortName, float64(totalDownloaded)/float64(totalSize)*100, speed)
+					mu.Unlock()
+				}
+				if err != nil {
+					if err == io.EOF {
+						break
+					}
+					log.Println("\nError while reading response body:", err)
+					return
+				}
+			}
+		}(i)
 	}
+
+	wg.Wait()
+	fmt.Printf("\nFile downloaded and saved as %s\n", shortName)
 }
