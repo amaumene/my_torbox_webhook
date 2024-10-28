@@ -1,17 +1,21 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
-	"path/filepath"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 // Define struct to hold the received JSON data
@@ -37,37 +41,37 @@ type APIResponse struct {
 }
 
 type APIData struct {
-	ID                int       `json:"id"`
-	Name              string    `json:"name"`
-	CreatedAt         string    `json:"created_at"`
-	UpdatedAt         string    `json:"updated_at"`
-	AuthID            string    `json:"auth_id"`
-	Hash              string    `json:"hash"`
-	DownloadState     string    `json:"download_state"`
-	DownloadSpeed     int       `json:"download_speed"`
+	ID                int         `json:"id"`
+	Name              string      `json:"name"`
+	CreatedAt         string      `json:"created_at"`
+	UpdatedAt         string      `json:"updated_at"`
+	AuthID            string      `json:"auth_id"`
+	Hash              string      `json:"hash"`
+	DownloadState     string      `json:"download_state"`
+	DownloadSpeed     int         `json:"download_speed"`
 	OriginalURL       interface{} `json:"original_url"`
-	Eta               int       `json:"eta"`
-	Progress          float64   `json:"progress"`
-	Size              int64     `json:"size"`
-	DownloadID        string    `json:"download_id"`
-	Files             []APIFile `json:"files"`
-	Active            bool      `json:"active"`
-	Cached            bool      `json:"cached"`
-	DownloadPresent   bool      `json:"download_present"`
-	DownloadFinished  bool      `json:"download_finished"`
-	ExpiresAt         string    `json:"expires_at"`
+	Eta               int         `json:"eta"`
+	Progress          float64     `json:"progress"`
+	Size              int64       `json:"size"`
+	DownloadID        string      `json:"download_id"`
+	Files             []APIFile   `json:"files"`
+	Active            bool        `json:"active"`
+	Cached            bool        `json:"cached"`
+	DownloadPresent   bool        `json:"download_present"`
+	DownloadFinished  bool        `json:"download_finished"`
+	ExpiresAt         string      `json:"expires_at"`
 }
 
 type APIFile struct {
-	ID            int    `json:"id"`
-	Md5           string `json:"md5"`
-	Hash          string `json:"hash"`
-	Name          string `json:"name"`
-	Size          int64  `json:"size"`
-	S3Path        string `json:"s3_path"`
-	MimeType      string `json:"mimetype"`
-	ShortName     string `json:"short_name"`
-	AbsolutePath  string `json:"absolute_path"`
+	ID           int    `json:"id"`
+	Md5          string `json:"md5"`
+	Hash         string `json:"hash"`
+	Name         string `json:"name"`
+	Size         int64  `json:"size"`
+	S3Path       string `json:"s3_path"`
+	MimeType     string `json:"mimetype"`
+	ShortName    string `json:"short_name"`
+	AbsolutePath string `json:"absolute_path"`
 }
 
 type DownloadResponse struct {
@@ -77,129 +81,130 @@ type DownloadResponse struct {
 	Data    string      `json:"data"`
 }
 
-// Process the API calls and download in a separate goroutine
-func processNotification(notification Notification) {
-	// Define a regular expression to extract the desired string
-	regexPattern := `download (.+?) has`
-	re := regexp.MustCompile(regexPattern)
-
-	// Find the desired string in the message
-	match := re.FindStringSubmatch(notification.Data.Message)
-	if len(match) < 2 {
-		fmt.Println("Failed to extract the desired string")
-		return
-	}
-	extractedString := match[1]
-
-	// Perform the HTTP GET request to the API
-	apiURL := "https://api.torbox.app/v1/api/usenet/mylist"
-	req, err := http.NewRequest("GET", apiURL, nil)
+// Perform HTTP GET request
+func performGetRequest(url, token string) ([]byte, error) {
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		fmt.Println("Failed to create API request")
-		return
-	}
-
-	// Set the Authorization header
-	token := os.Getenv("API_TOKEN")
-	if token == "" {
-		fmt.Println("Environment variable API_TOKEN is not set.")
-		os.Exit(1)
+		return nil, fmt.Errorf("failed to create API request: %v", err)
 	}
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Println("Failed to perform API request")
-		return
+		return nil, fmt.Errorf("failed to perform API request: %v", err)
 	}
 	defer resp.Body.Close()
 
-	// Read the response body
 	respBody, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		fmt.Println("Failed to read API response")
+		return nil, fmt.Errorf("failed to read API response: %v", err)
+	}
+
+	return respBody, nil
+}
+
+// Process and download the file based on the notification
+func processNotification(notification Notification) {
+	extractedString, err := extractString(notification.Data.Message)
+	if err != nil {
+		log.Println("Error extracting string:", err)
 		return
 	}
 
-	// Unmarshal the API response into an APIResponse struct
+	token := os.Getenv("API_TOKEN")
+	if token == "" {
+		log.Println("Environment variable API_TOKEN is not set.")
+		return
+	}
+
+	// Perform the API call and get the response
+	apiURL := "https://api.torbox.app/v1/api/usenet/mylist"
+	respBody, err := performGetRequest(apiURL, token)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+
+	// Unmarshal the API response
 	var apiResponse APIResponse
 	err = json.Unmarshal(respBody, &apiResponse)
 	if err != nil {
-		fmt.Println("Failed to parse API response")
+		log.Println("Failed to parse API response:", err)
 		return
 	}
 
-	// Find the matching item and file in the API response
-	var itemID, fileID int
-	var shortName string
+	itemID, fileID, shortName, err := findMatchingItem(apiResponse, extractedString)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+
+	err = requestDownload(itemID, fileID, shortName, token)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+}
+
+// Extract desired string from message
+func extractString(message string) (string, error) {
+	regexPattern := `download (.+?) has`
+	re := regexp.MustCompile(regexPattern)
+	match := re.FindStringSubmatch(message)
+	if len(match) < 2 {
+		return "", fmt.Errorf("failed to extract the desired string")
+	}
+	return match[1], nil
+}
+
+// Find matching item in API response
+func findMatchingItem(apiResponse APIResponse, extractedString string) (int, int, string, error) {
 	for _, item := range apiResponse.Data {
 		if item.Name == extractedString {
 			for _, file := range item.Files {
 				if strings.HasPrefix(file.MimeType, "video/") && !strings.Contains(file.ShortName, "sample") {
-					itemID = item.ID
-					fileID = file.ID
-					shortName = file.ShortName
-					break
+					return item.ID, file.ID, file.ShortName, nil
 				}
-			}
-			if itemID != 0 && fileID != 0 {
-				break
 			}
 		}
 	}
+	return 0, 0, "", fmt.Errorf("no matching item found")
+}
 
-	if itemID == 0 || fileID == 0 {
-		fmt.Println("No matching item found")
-		return
-	}
-
-	// Print the extracted itemID, fileID, and shortName
-	fmt.Printf("Extracted item ID: %d, file ID: %d, file short name: %s\n", itemID, fileID, shortName)
-
-	// Make another API call with the itemID and fileID
+// Request download using itemID, fileID and token
+func requestDownload(itemID, fileID int, shortName, token string) error {
 	requestDLURL := fmt.Sprintf("https://api.torbox.app/v1/api/usenet/requestdl?token=%s&usenet_id=%d&file_id=%d&zip=false", token, itemID, fileID)
 
-	req, err = http.NewRequest("GET", requestDLURL, nil)
+	respBody, err := performGetRequest(requestDLURL, token)
 	if err != nil {
-		fmt.Println("Failed to create API request")
-		return
+		return err
 	}
 
-	resp, err = client.Do(req)
-	if err != nil {
-		fmt.Println("Failed to perform API request")
-		return
-	}
-	defer resp.Body.Close()
-
-	// Read the response body
-	respBody, err = ioutil.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Println("Failed to read API response")
-		return
-	}
-
-	// Unmarshal the second API response into a DownloadResponse struct
 	var downloadResponse DownloadResponse
 	err = json.Unmarshal(respBody, &downloadResponse)
 	if err != nil {
-		fmt.Println("Failed to parse download API response")
-		return
+		return fmt.Errorf("failed to parse download API response: %v", err)
 	}
 
-	// Check if the download request was successful
 	if !downloadResponse.Success {
-		fmt.Println("Failed to request download")
-		return
+		return fmt.Errorf("failed to request download")
 	}
 
-	// Make the third API call to download the file content
-	downloadURL := downloadResponse.Data
-	resp, err = client.Get(downloadURL)
+	err = downloadFile(downloadResponse.Data, shortName)
 	if err != nil {
-		fmt.Println("Failed to download file content")
-		return
+		return err
+	}
+
+	return nil
+}
+
+// Download file from URL and save to specified path
+func downloadFile(downloadURL, shortName string) error {
+	client := &http.Client{}
+	resp, err := client.Get(downloadURL)
+	if err != nil {
+		return fmt.Errorf("failed to download file content: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -209,28 +214,27 @@ func processNotification(notification Notification) {
 	}
 	fullFilePath := filepath.Join(downloadDir, shortName)
 
-	// Create the file where the content will be streamed
 	outFile, err := os.Create(fullFilePath)
 	if err != nil {
-		log.Fatalf("Failed to create file: %v", err)
+		return fmt.Errorf("failed to create file: %v", err)
 	}
 	defer outFile.Close()
 
-	// Get the total size of the file for progress reporting
-	totalSize := resp.ContentLength
-	var downloadedSize int64
+	writeContentToFile(resp, outFile, shortName, resp.ContentLength)
 
-	// Create a buffer to hold chunks of data
+	fmt.Printf("\nFile downloaded and saved as %s\n", shortName)
+	return nil
+}
+
+// Write content to file and show progress
+func writeContentToFile(resp *http.Response, outFile *os.File, shortName string, totalSize int64) {
+	var downloadedSize int64
 	buf := make([]byte, 32*1024)
 
-	// Write content to the file and show progress
 	for {
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
-			// Write to file
 			outFile.Write(buf[:n])
-
-			// Update progress
 			downloadedSize += int64(n)
 			fmt.Printf("\rDownloading %s... %.2f%% complete", shortName, float64(downloadedSize)/float64(totalSize)*100)
 		}
@@ -238,12 +242,10 @@ func processNotification(notification Notification) {
 			if err == io.EOF {
 				break
 			}
-			fmt.Println("\nError while reading response body:", err)
+			log.Println("\nError while reading response body:", err)
 			return
 		}
 	}
-
-	fmt.Printf("\nFile downloaded and saved as %s\n", shortName)
 }
 
 // Handler function for the POST request
@@ -253,7 +255,6 @@ func handlePostData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read the request body
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
@@ -261,7 +262,6 @@ func handlePostData(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	// Unmarshal the JSON data into a Notification struct
 	var notification Notification
 	err = json.Unmarshal(body, &notification)
 	if err != nil {
@@ -269,21 +269,153 @@ func handlePostData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Start processing in a separate goroutine
 	go processNotification(notification)
 
-	// Respond to the client immediately
 	w.WriteHeader(http.StatusOK)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"message": "Data received and processing started"}`))
 }
 
+// Monitor new files in specified directory
+func monitorNewFiles(watchDirectory string) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer watcher.Close()
+
+	done := make(chan bool)
+	go func() {
+		for {
+			select {
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+				if event.Op&fsnotify.Create == fsnotify.Create {
+					fmt.Println("Detected new file:", event.Name)
+					if err := processFile(event.Name); err != nil {
+						log.Println("Error processing file:", err)
+					}
+				}
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+				log.Println("Error:", err)
+			}
+		}
+	}()
+
+	if err := watcher.Add(watchDirectory); err != nil {
+		log.Fatal(err)
+	}
+
+	<-done
+}
+
+// Process a newly created file
+func processFile(fileName string) error {
+	token := os.Getenv("API_TOKEN")
+	if token == "" {
+		return fmt.Errorf("environment variable API_TOKEN is not set")
+	}
+
+	fullFilePath, err := filepath.Abs(fileName)
+	if err != nil {
+		return fmt.Errorf("could not get absolute path of file: %w", err)
+	}
+
+	file, err := os.Open(fullFilePath)
+	if err != nil {
+		return fmt.Errorf("could not open file: %w", err)
+	}
+	defer file.Close()
+
+	return uploadFileWithRetries(fullFilePath, file, filepath.Base(fileName), token)
+}
+
+// Upload a file to the server
+func uploadFile(file *os.File, fileName, token string) ([]byte, int, error) {
+	var b bytes.Buffer
+	w := multipart.NewWriter(&b)
+
+	fw, err := w.CreateFormFile("file", fileName)
+	if err != nil {
+		return nil, 0, fmt.Errorf("could not create form file: %w", err)
+	}
+	if _, err = io.Copy(fw, file); err != nil {
+		return nil, 0, fmt.Errorf("could not copy file contents: %w", err)
+	}
+	w.Close()
+
+	req, err := http.NewRequest("POST", "https://api.torbox.app/v1/api/usenet/createusenetdownload", &b)
+	if err != nil {
+		return nil, 0, fmt.Errorf("could not create HTTP request: %w", err)
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("could not perform HTTP request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, 0, fmt.Errorf("could not read response body: %w", err)
+	}
+
+	return body, resp.StatusCode, nil
+}
+
+// Handle the response of the file upload with multiple attempts
+func uploadFileWithRetries(fullFilePath string, file *os.File, fileName, token string) error {
+	const maxAttempts = 5
+	delay := 2 * time.Second
+
+	for attempts := 0; attempts < maxAttempts; attempts++ {
+		response, statusCode, err := uploadFile(file, fileName, token)
+		if err != nil {
+			fmt.Printf("Attempt %d: error uploading file: %v\n", attempts+1, err)
+			time.Sleep(delay)
+			continue
+		}
+
+		respString := string(response)
+		if statusCode == http.StatusOK && strings.Contains(respString, "success") {
+			fmt.Println("File uploaded successfully:", fileName)
+			if err := os.Remove(fullFilePath); err != nil {
+				fmt.Printf("Attempt %d: could not delete file: %v\n", attempts+1, err)
+			} else {
+				fmt.Println("File deleted:", fileName)
+			}
+			return nil
+		} else {
+			fmt.Printf("Attempt %d: failed to upload file. Status code: %d. Response: %s\n", attempts+1, statusCode, respString)
+			time.Sleep(5 * time.Second)
+		}
+	}
+
+	return fmt.Errorf("retry limit exceeded. Failed to upload file: %s", fullFilePath)
+}
+
 func main() {
+	go func() {
+		incomingDir := os.Getenv("INCOMING_NZB")
+		if incomingDir == "" {
+			log.Fatal("INCOMING_NZB environment variable is not set")
+		}
+		monitorNewFiles(incomingDir)
+	}()
+
 	http.HandleFunc("/api/data", handlePostData)
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	// Start the server
+
 	port := ":3000"
 	fmt.Printf("Server is running on port %s\n", port)
 	log.Fatal(http.ListenAndServe(port, nil))
