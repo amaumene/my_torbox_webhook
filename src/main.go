@@ -16,7 +16,8 @@ const (
 var (
 	apiToken    string
 	downloadDir string
-	incomingDir string
+	nzbDir      string
+	tempDir     string
 	httpClient  = &http.Client{}
 )
 
@@ -31,14 +32,19 @@ func init() {
 		log.Fatal("Environment variable DOWNLOAD_DIR is not set.")
 	}
 
-	incomingDir = os.Getenv("INCOMING_NZB")
-	if incomingDir == "" {
-		log.Fatal("INCOMING_NZB environment variable is not set.")
+	nzbDir = os.Getenv("NZB_DIR")
+	if nzbDir == "" {
+		log.Fatal("NZB_DIR environment variable is not set.")
+	}
+
+	tempDir := os.Getenv("TEMP_DIR")
+	if tempDir == "" {
+		log.Fatal("TEMP_DIR environment variable is not set")
 	}
 }
 
 func main() {
-	go monitorNewFiles(incomingDir)
+	go monitorNewFiles(nzbDir)
 
 	http.HandleFunc("/api/data", handlePostData)
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {

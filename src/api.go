@@ -123,21 +123,19 @@ func downloadFile(downloadURL, shortName string) error {
 	}
 	defer resp.Body.Close()
 
-	fullFilePath := filepath.Join(downloadDir, shortName)
-
-	outFile, err := os.Create(fullFilePath)
-	if err != nil {
-		return fmt.Errorf("failed to create file: %v", err)
-	}
-	defer outFile.Close()
-
-	writeContentToFile(resp, outFile, shortName, resp.ContentLength)
+	writeContentToFile(resp, shortName, resp.ContentLength)
 
 	fmt.Printf("\nFile downloaded and saved as %s\n", shortName)
 	return nil
 }
 
-func writeContentToFile(resp *http.Response, outFile *os.File, shortName string, totalSize int64) {
+func writeContentToFile(resp *http.Response, shortName string, totalSize int64) error {
+	tempFile, err := os.CreateTemp(tempDir, "tempfile-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temporary file: %v", err)
+	}
+	defer tempFile.Close()
+
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var totalDownloaded int64
@@ -173,7 +171,7 @@ func writeContentToFile(resp *http.Response, outFile *os.File, shortName string,
 			for {
 				n, err := partResp.Body.Read(partBuf)
 				if n > 0 {
-					outFile.WriteAt(partBuf[:n], start)
+					tempFile.WriteAt(partBuf[:n], start)
 					start += int64(n)
 					mu.Lock()
 					totalDownloaded += int64(n)
@@ -194,5 +192,13 @@ func writeContentToFile(resp *http.Response, outFile *os.File, shortName string,
 	}
 
 	wg.Wait()
+
+	finalFilePath := filepath.Join(downloadDir, shortName)
+	err = os.Rename(tempFile.Name(), finalFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to rename temporary file: %v", err)
+	}
+
 	fmt.Printf("\nFile downloaded and saved as %s\n", shortName)
+	return nil
 }
