@@ -39,13 +39,13 @@ func processNotification(notification Notification) {
 		return
 	}
 
-	itemID, fileID, shortName, err := findMatchingItem(apiResponse, extractedString)
+	itemID, fileID, fileSize, shortName, err := findMatchingItem(apiResponse, extractedString)
 	if err != nil {
 		log.Println(err)
 		return
 	}
 
-	err = requestDownload(itemID, fileID, shortName, apiToken)
+	err = requestDownload(itemID, fileID, fileSize, shortName, apiToken)
 	if err != nil {
 		log.Println(err)
 		return

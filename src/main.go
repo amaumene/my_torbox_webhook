@@ -37,7 +37,7 @@ func init() {
 		log.Fatal("NZB_DIR environment variable is not set.")
 	}
 
-	tempDir := os.Getenv("TEMP_DIR")
+	tempDir = os.Getenv("TEMP_DIR")
 	if tempDir == "" {
 		log.Fatal("TEMP_DIR environment variable is not set")
 	}
