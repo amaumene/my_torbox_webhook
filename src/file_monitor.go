@@ -144,11 +144,6 @@ func uploadFile(filePath string) error {
     fmt.Println("File uploaded successfully:", filePath)
 
     fmt.Println("Response from server:", string(respBody))
-    // Delete the file after successful upload
-    err = os.Remove(filePath)
-    if err != nil {
-        return fmt.Errorf("failed to delete file: %v", err)
-    }
 
     if serverResponse.Detail == "Found cached usenet download. Using cached download." {
     	respBody, err := performGetRequest(apiURL, apiToken)
@@ -170,6 +165,11 @@ func uploadFile(filePath string) error {
 	    if err != nil {
 		    return fmt.Errorf("failed to request download: %v", err)
 	    }
+    }
+    // Delete the file after successful upload
+    err = os.Remove(filePath)
+    if err != nil {
+        return fmt.Errorf("failed to delete file: %v", err)
     }
 
     return nil
