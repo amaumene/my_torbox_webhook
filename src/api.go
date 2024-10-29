@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 	"sync"
+	"bytes"
 )
 
 type APIResponse struct {
@@ -95,6 +96,19 @@ func findMatchingItem(apiResponse APIResponse, extractedString string) (int, int
 	return 0, 0, 0, "", fmt.Errorf("no matching item found")
 }
 
+func findMatchingItemID(apiResponse APIResponse, itemID int) (int, int, int64, string, error) {
+    for _, item := range apiResponse.Data {
+        if item.ID == itemID {
+            for _, file := range item.Files {
+                if strings.HasPrefix(file.MimeType, "video/") && !strings.Contains(file.ShortName, "sample") {
+                    return item.ID, file.ID, file.Size, file.ShortName, nil
+                }
+            }
+        }
+    }
+    return 0, 0, 0, "", fmt.Errorf("no matching item found for ID %d", itemID)
+}
+
 func requestDownload(itemID, fileID int, fileSize int64, shortName, token string) error {
 	url := fmt.Sprintf("%s?token=%s&usenet_id=%d&file_id=%d&zip=false", requestDLURL, token, itemID, fileID)
 
@@ -113,7 +127,42 @@ func requestDownload(itemID, fileID int, fileSize int64, shortName, token string
 		return fmt.Errorf("failed to request download")
 	}
 
-	return downloadFile(downloadResponse.Data, shortName, fileSize)
+	err = downloadFile(downloadResponse.Data, shortName, fileSize)
+	if err != nil {
+	    return fmt.Errorf("failed to download file: %v", err)
+    }
+    return deleteFile(itemID, token)
+}
+
+func deleteFile(itemID int, token string) error {
+	data := map[string]interface{}{
+		"usenet_id": itemID,
+		"operation": "delete",
+	}
+
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal data: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", controlURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to perform request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to delete file, status: %s", resp.Status)
+	}
+    fmt.Printf("File deleted successfully\n")
+	return nil
 }
 
 func downloadFile(downloadURL, shortName string, fileSize int64) error {
@@ -175,7 +224,6 @@ func writeContentToFile(resp *http.Response, shortName string, totalSize int64) 
 		return fmt.Errorf("failed to rename temporary file: %v", err)
 	}
 
-	fmt.Printf("\nFile downloaded and saved as %s\n", shortName)
 	return nil
 }
 

@@ -11,6 +11,7 @@ const (
 	apiURL       = "https://api.torbox.app/v1/api/usenet/mylist"
 	requestDLURL = "https://api.torbox.app/v1/api/usenet/requestdl"
 	uploadURL    = "https://api.torbox.app/v1/api/usenet/createusenetdownload"
+	controlURL   = "https://api.torbox.app/v1/api/usenet/controlusenetdownload"
 )
 
 var (

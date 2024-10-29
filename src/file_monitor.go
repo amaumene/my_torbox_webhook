@@ -11,12 +11,23 @@ import (
 	"path/filepath"
 	"time"
 	"strings"
+	"encoding/json"
 
 	"github.com/fsnotify/fsnotify"
 )
 
 const maxRetries = 3
 const retryDelay = 2 * time.Second
+
+var serverResponse struct {
+    Success bool `json:"success"`
+    Detail  string `json:"detail"`
+    Data struct {
+        Hash             string `json:"hash"`
+        UsenetDownloadID int    `json:"usenetdownload_id"`
+        AuthID           string `json:"auth_id"`
+    } `json:"data"`
+}
 
 func monitorNewFiles(watchDirectory string) {
 	watcher, err := fsnotify.NewWatcher()
@@ -116,12 +127,50 @@ func uploadFile(filePath string) error {
         return fmt.Errorf("failed to upload file, status: %s", resp.Status)
     }
 
+    // Read and print the response body
+    respBody, err := io.ReadAll(resp.Body)
+    if err != nil {
+        return fmt.Errorf("failed to read response body: %v", err)
+    }
+
+    err = json.Unmarshal(respBody, &serverResponse)
+    if err != nil {
+        return fmt.Errorf("failed to parse response body: %v", err)
+    }
+
+    if serverResponse.Success != true {
+        return fmt.Errorf("failed to upload file: %s", serverResponse.Detail)
+    }
     fmt.Println("File uploaded successfully:", filePath)
 
+    fmt.Println("Response from server:", string(respBody))
     // Delete the file after successful upload
     err = os.Remove(filePath)
     if err != nil {
         return fmt.Errorf("failed to delete file: %v", err)
     }
+
+    if serverResponse.Detail == "Found cached usenet download. Using cached download." {
+    	respBody, err := performGetRequest(apiURL, apiToken)
+	    if err != nil {
+		    return fmt.Errorf("failed to perform API request: %v", err)
+	    }
+
+	    var apiResponse APIResponse
+	    err = json.Unmarshal(respBody, &apiResponse)
+	    if err != nil {
+		    return fmt.Errorf("failed to parse API response: %v", err)
+	    }
+        itemID, fileID, fileSize, shortName, err := findMatchingItemID(apiResponse, serverResponse.Data.UsenetDownloadID)
+	    if err != nil {
+		    return fmt.Errorf("failed to find matching item: %v", err)
+	    }
+
+	    err = requestDownload(itemID, fileID, fileSize, shortName, apiToken)
+	    if err != nil {
+		    return fmt.Errorf("failed to request download: %v", err)
+	    }
+    }
+
     return nil
 }
