@@ -22,28 +22,33 @@ type Data struct {
 func processNotification(notification Notification) {
 	extractedString, err := extractString(notification.Data.Message)
 	if err != nil {
-		return fmt.Errorf("error extracting string: %v", err)
+		log.Println("Error extracting string:", err)
+		return
 	}
 
 	respBody, err := performGetRequest(apiURL, apiToken)
 	if err != nil {
-	    return fmt.Errorf("failed to read API response: %v", err)
+		log.Println(err)
+		return
 	}
 
 	var apiResponse APIResponse
 	err = json.Unmarshal(respBody, &apiResponse)
 	if err != nil {
-	    return fmt.Errorf("failed to parse API response: %v", err)
+		log.Println("Failed to parse API response:", err)
+		return
 	}
 
 	itemID, fileID, fileSize, shortName, err := findMatchingItem(apiResponse, extractedString)
 	if err != nil {
-	    return fmt.Errorf("failed to find matching item: %v", err)
+		log.Println(err)
+		return
 	}
 
 	err = requestDownload(itemID, fileID, fileSize, shortName, apiToken)
 	if err != nil {
-	    return fmt.Errorf("failed to request download: %v", err)
+		log.Println(err)
+		return
 	}
 }
 
