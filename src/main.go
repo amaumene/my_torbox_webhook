@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 )
 
 const (
@@ -41,6 +42,21 @@ func init() {
 	tempDir = os.Getenv("TEMP_DIR")
 	if tempDir == "" {
 		log.Fatal("TEMP_DIR environment variable is not set")
+	}
+	cleanDir(tempDir)
+}
+
+func cleanDir(tempDir string) {
+	files, err := os.ReadDir(tempDir)
+	if err != nil {
+		log.Fatalf("Failed to read temp directory: %v", err)
+	}
+
+	for _, file := range files {
+		err := os.RemoveAll(filepath.Join(tempDir, file.Name()))
+		if err != nil {
+			log.Printf("Failed to remove file %s: %v", file.Name(), err)
+		}
 	}
 }
 
