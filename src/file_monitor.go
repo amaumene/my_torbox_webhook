@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -9,9 +10,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"time"
 	"strings"
-	"encoding/json"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 )
@@ -20,13 +20,13 @@ const maxRetries = 3
 const retryDelay = 2 * time.Second
 
 var serverResponse struct {
-    Success bool `json:"success"`
-    Detail  string `json:"detail"`
-    Data struct {
-        Hash             string `json:"hash"`
-        UsenetDownloadID int    `json:"usenetdownload_id"`
-        AuthID           string `json:"auth_id"`
-    } `json:"data"`
+	Success bool   `json:"success"`
+	Detail  string `json:"detail"`
+	Data    struct {
+		Hash             string `json:"hash"`
+		UsenetDownloadID int    `json:"usenetdownload_id"`
+		AuthID           string `json:"auth_id"`
+	} `json:"data"`
 }
 
 func monitorNewFiles(watchDirectory string) {
@@ -80,97 +80,96 @@ func uploadFileWithRetries(filePath string) error {
 }
 
 func uploadFile(filePath string) error {
-    file, err := os.Open(filePath)
-    if err != nil {
-        return fmt.Errorf("failed to open file: %v", err)
-    }
-    defer file.Close()
+	file, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to open file: %v", err)
+	}
+	defer file.Close()
 
-    body := &bytes.Buffer{}
-    writer := multipart.NewWriter(body)
-    part, err := writer.CreateFormFile("file", filepath.Base(file.Name()))
-    if err != nil {
-        return fmt.Errorf("failed to create form file: %v", err)
-    }
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("file", filepath.Base(file.Name()))
+	if err != nil {
+		return fmt.Errorf("failed to create form file: %v", err)
+	}
 
-    _, err = io.Copy(part, file)
-    if err != nil {
-        return fmt.Errorf("failed to copy file content: %v", err)
-    }
+	_, err = io.Copy(part, file)
+	if err != nil {
+		return fmt.Errorf("failed to copy file content: %v", err)
+	}
 
-    // Add the name field without the extension
-    fileNameWithoutExt := strings.TrimSuffix(filepath.Base(file.Name()), filepath.Ext(file.Name()))
-    err = writer.WriteField("name", fileNameWithoutExt)
-    if err != nil {
-        return fmt.Errorf("failed to write name field: %v", err)
-    }
+	// Add the name field without the extension
+	fileNameWithoutExt := strings.TrimSuffix(filepath.Base(file.Name()), filepath.Ext(file.Name()))
+	err = writer.WriteField("name", fileNameWithoutExt)
+	if err != nil {
+		return fmt.Errorf("failed to write name field: %v", err)
+	}
 
-    err = writer.Close()
-    if err != nil {
-        return fmt.Errorf("failed to close writer: %v", err)
-    }
+	err = writer.Close()
+	if err != nil {
+		return fmt.Errorf("failed to close writer: %v", err)
+	}
 
-    req, err := http.NewRequest("POST", uploadURL, body)
-    if err != nil {
-        return fmt.Errorf("failed to create request: %v", err)
-    }
-    req.Header.Set("Content-Type", writer.FormDataContentType())
-    req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiToken))
+	req, err := http.NewRequest("POST", uploadURL, body)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %v", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiToken))
 
-    resp, err := httpClient.Do(req)
-    if err != nil {
-        return fmt.Errorf("failed to upload file: %v", err)
-    }
-    defer resp.Body.Close()
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to upload file: %v", err)
+	}
+	defer resp.Body.Close()
 
-    if resp.StatusCode != http.StatusOK {
-        return fmt.Errorf("failed to upload file, status: %s", resp.Status)
-    }
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to upload file, status: %s", resp.Status)
+	}
 
-    // Read and print the response body
-    respBody, err := io.ReadAll(resp.Body)
-    if err != nil {
-        return fmt.Errorf("failed to read response body: %v", err)
-    }
+	// Read and print the response body
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response body: %v", err)
+	}
 
-    err = json.Unmarshal(respBody, &serverResponse)
-    if err != nil {
-        return fmt.Errorf("failed to parse response body: %v", err)
-    }
+	err = json.Unmarshal(respBody, &serverResponse)
+	if err != nil {
+		return fmt.Errorf("failed to parse response body: %v", err)
+	}
 
-    if serverResponse.Success != true {
-        return fmt.Errorf("failed to upload file: %s", serverResponse.Detail)
-    }
-    fmt.Println("File uploaded successfully:", filePath)
+	if serverResponse.Success != true {
+		return fmt.Errorf("failed to upload file: %s", serverResponse.Detail)
+	}
+	fmt.Println("File uploaded successfully:", filePath)
 
-    fmt.Println("Response from server:", string(respBody))
+	if serverResponse.Detail == "Found cached usenet download. Using cached download." {
+		fmt.Println("Found cached usenet download. Using cached download.")
+		respBody, err := performGetRequest(apiURL, apiToken)
+		if err != nil {
+			return fmt.Errorf("failed to perform API request: %v", err)
+		}
 
-    if serverResponse.Detail == "Found cached usenet download. Using cached download." {
-    	respBody, err := performGetRequest(apiURL, apiToken)
-	    if err != nil {
-		    return fmt.Errorf("failed to perform API request: %v", err)
-	    }
+		var apiResponse APIResponse
+		err = json.Unmarshal(respBody, &apiResponse)
+		if err != nil {
+			return fmt.Errorf("failed to parse API response: %v", err)
+		}
+		itemID, file, err := findMatchingItemID(apiResponse, serverResponse.Data.UsenetDownloadID)
+		if err != nil {
+			return fmt.Errorf("failed to find matching item: %v", err)
+		}
 
-	    var apiResponse APIResponse
-	    err = json.Unmarshal(respBody, &apiResponse)
-	    if err != nil {
-		    return fmt.Errorf("failed to parse API response: %v", err)
-	    }
-        itemID, fileID, fileSize, shortName, err := findMatchingItemID(apiResponse, serverResponse.Data.UsenetDownloadID)
-	    if err != nil {
-		    return fmt.Errorf("failed to find matching item: %v", err)
-	    }
+		err = requestDownload(itemID, file, apiToken)
+		if err != nil {
+			return fmt.Errorf("failed to request download: %v", err)
+		}
+	}
+	// Delete the file after successful upload
+	err = os.Remove(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to delete file: %v", err)
+	}
 
-	    err = requestDownload(itemID, fileID, fileSize, shortName, apiToken)
-	    if err != nil {
-		    return fmt.Errorf("failed to request download: %v", err)
-	    }
-    }
-    // Delete the file after successful upload
-    err = os.Remove(filePath)
-    if err != nil {
-        return fmt.Errorf("failed to delete file: %v", err)
-    }
-
-    return nil
+	return nil
 }

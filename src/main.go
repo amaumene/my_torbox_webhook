@@ -33,17 +33,34 @@ func init() {
 	if downloadDir == "" {
 		log.Fatal("Environment variable DOWNLOAD_DIR is not set.")
 	}
+	// Create if it doesn't exist
+	createDir(downloadDir)
 
 	nzbDir = os.Getenv("NZB_DIR")
 	if nzbDir == "" {
 		log.Fatal("NZB_DIR environment variable is not set.")
 	}
+	// Create if it doesn't exist
+	createDir(nzbDir)
 
 	tempDir = os.Getenv("TEMP_DIR")
 	if tempDir == "" {
 		log.Fatal("TEMP_DIR environment variable is not set")
 	}
+	// Create if it doesn't exist
+	createDir(tempDir)
+
+	// Clean
+	cleanDir(downloadDir)
+	cleanDir(nzbDir)
 	cleanDir(tempDir)
+}
+
+func createDir(dir string) {
+	err := os.MkdirAll(dir, 0755)
+	if err != nil {
+		log.Fatalf("Failed to create directory %s: %v", dir, err)
+	}
 }
 
 func cleanDir(tempDir string) {
