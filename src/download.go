@@ -63,6 +63,7 @@ func writeContentToFile(resp *http.Response, file APIFile) error {
 	}
 	if fileInfo.Size() != file.Size {
 		log.Println("Downloaded file size does not match the expected size, restarting download...")
+		time.Sleep(retryDelay)
 		return downloadFile(resp.Request.URL.String(), file)
 	}
 
@@ -77,6 +78,7 @@ func writeContentToFile(resp *http.Response, file APIFile) error {
 
 	if downloadedMd5 != file.Md5 {
 		log.Println("Downloaded file MD5 does not match the expected MD5, restarting download...")
+		time.Sleep(retryDelay)
 		return downloadFile(resp.Request.URL.String(), file)
 	}
 

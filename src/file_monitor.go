@@ -16,9 +16,6 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
-const maxRetries = 3
-const retryDelay = 2 * time.Second
-
 var serverResponse struct {
 	Success bool   `json:"success"`
 	Detail  string `json:"detail"`
@@ -110,7 +107,7 @@ func uploadFile(filePath string) error {
 		return fmt.Errorf("failed to close writer: %v", err)
 	}
 
-	req, err := http.NewRequest("POST", uploadURL, body)
+	req, err := http.NewRequest("POST", createUsenetDLURL, body)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %v", err)
 	}

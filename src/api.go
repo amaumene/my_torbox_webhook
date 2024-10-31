@@ -141,7 +141,7 @@ func deleteFile(itemID int, token string) error {
 		return fmt.Errorf("failed to marshal data: %v", err)
 	}
 
-	req, err := http.NewRequest("POST", controlURL, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", controlUsenetURL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %v", err)
 	}

@@ -6,13 +6,16 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 const (
-	apiURL       = "https://api.torbox.app/v1/api/usenet/mylist"
-	requestDLURL = "https://api.torbox.app/v1/api/usenet/requestdl"
-	uploadURL    = "https://api.torbox.app/v1/api/usenet/createusenetdownload"
-	controlURL   = "https://api.torbox.app/v1/api/usenet/controlusenetdownload"
+	apiURL            = "https://api.torbox.app/v1/api/usenet/mylist"
+	requestDLURL      = "https://api.torbox.app/v1/api/usenet/requestdl"
+	createUsenetDLURL = "https://api.torbox.app/v1/api/usenet/createusenetdownload"
+	controlUsenetURL  = "https://api.torbox.app/v1/api/usenet/controlusenetdownload"
+	maxRetries        = 3
+	retryDelay        = 2 * time.Second
 )
 
 var (
